@@ -1,0 +1,5 @@
+name,level,country,city,foundedYear,annualRevenue,employees
+Nvidia Supplier,Level 1,USA,Santa Clara,1993,60922000000,29600
+TSMC Supplier,Level 1,Taiwan,Hsinchu,1987,69300000000,76000
+Battery Partner,Level 2,China,Shenzhen,2010,15000000000,25000
+Logistics Partner,Level 3,UK,London,2005,3000000000,8000

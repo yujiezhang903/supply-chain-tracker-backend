@@ -1,0 +1,4 @@
+sourceCompanyName,targetCompanyName,relationshipType,productName,value,description
+TSMC Supplier,Nvidia Supplier,Supplier,Semiconductor chips,12000000,TSMC supplies chips to Nvidia Supplier
+Battery Partner,Nvidia Supplier,Supplier,Battery modules,5000000,Battery Partner supplies battery modules
+Logistics Partner,Nvidia Supplier,Logistics,Transport service,1000000,Logistics Partner provides transport service
