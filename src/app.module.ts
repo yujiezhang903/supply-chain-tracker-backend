@@ -11,6 +11,7 @@ import { CompaniesModule } from './companies/companies.module';
 import { OrdersModule } from './orders/orders.module';
 import { RelationshipsModule } from './relationships/relationships.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { AiAgentModule } from './ai-agent/ai-agent.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     OrdersModule,
     RelationshipsModule,
     DashboardModule,
+    AiAgentModule,
   ],
 
   controllers: [AppController],

@@ -1,0 +1,95 @@
+import {
+  Injectable,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+import type {
+  ModelAdapter,
+  ModelCompletion,
+  ModelMessage,
+} from './model-adapter.interface';
+
+type OllamaChatResponse = {
+  model?: string;
+  message?: {
+    role?: string;
+    content?: string;
+  };
+  error?: string;
+};
+
+@Injectable()
+export class OllamaAdapter implements ModelAdapter {
+  constructor(private readonly config: ConfigService) {}
+
+  async complete(
+    messages: ModelMessage[],
+  ): Promise<ModelCompletion> {
+    const baseUrl =
+      this.config.get<string>('OLLAMA_BASE_URL') ??
+      'http://localhost:11434';
+    const model =
+      this.config.get<string>('OLLAMA_MODEL') ?? 'qwen3:8b';
+    const numCtx =
+      Number(this.config.get<string>('OLLAMA_NUM_CTX')) || 4096;
+    const endpoint =
+      baseUrl.replace(/\/$/, '') + '/api/chat';
+
+    let response: Response;
+
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: false,
+          think: false,
+          options: {
+            num_ctx: numCtx,
+          },
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch {
+      throw new ServiceUnavailableException(
+        'Cannot connect to Ollama. Make sure the Ollama app is running.',
+      );
+    }
+
+    let payload: OllamaChatResponse;
+
+    try {
+      payload = (await response.json()) as OllamaChatResponse;
+    } catch {
+      throw new ServiceUnavailableException(
+        'Ollama returned an invalid response.',
+      );
+    }
+
+    if (!response.ok) {
+      throw new ServiceUnavailableException(
+        payload.error ||
+          `Ollama request failed with status ${response.status}.`,
+      );
+    }
+
+    const content = payload.message?.content?.trim();
+
+    if (!content) {
+      throw new ServiceUnavailableException(
+        'Ollama returned an empty response.',
+      );
+    }
+
+    return {
+      provider: 'ollama',
+      model: payload.model || model,
+      content,
+    };
+  }
+}
