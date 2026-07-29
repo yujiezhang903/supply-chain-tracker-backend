@@ -55,6 +55,8 @@ export class AiAgentService {
     const session = this.dataSource.manager.create(AiChatSession, {
       title: dto.title?.trim() || 'New conversation',
       provider,
+      model: 'rule-based',
+      status: 'active',
       userId: null,
       messages,
     });
@@ -106,8 +108,21 @@ export class AiAgentService {
     const provider = this.modelRouter.normalizeProvider(
       dto.provider ?? session.provider,
     );
-
     const userContent = dto.content.trim();
+
+    if (!userContent && files.length === 0) {
+      return {
+        session,
+        provider,
+        model: session.model,
+        userMessage: null,
+        assistantMessage: this.createTextMessage(
+          'assistant',
+          'Please enter a message or attach a file.',
+        ),
+      };
+    }
+
     const attachments = files.map((file) => ({
       name: file.originalname,
       mimeType: file.mimetype,
@@ -115,7 +130,10 @@ export class AiAgentService {
     }));
 
     const userMessage: AiChatMessage = {
-      ...this.createTextMessage('user', userContent),
+      ...this.createTextMessage(
+        'user',
+        userContent || 'Please analyse the attached file.',
+      ),
       ...(attachments.length > 0 ? { attachments } : {}),
     };
 
@@ -138,16 +156,12 @@ export class AiAgentService {
     if (ruleMessage) {
       assistantMessage = ruleMessage;
     } else {
-      const modelMessages = this.toModelMessages(
-        session.messages,
-        companies,
-      );
-
+      const modelMessages = this.toModelMessages(session.messages, companies);
       const fileContext = this.extractFileContext(files);
       const lastMessage = modelMessages.at(-1);
 
       if (fileContext && lastMessage?.role === 'user') {
-        lastMessage.content = `${lastMessage.content}\n\n${fileContext}`;
+        lastMessage.content += '\n\n' + fileContext;
       }
 
       const completion = await this.modelRouter.complete(
@@ -157,13 +171,13 @@ export class AiAgentService {
 
       responseProvider = completion.provider;
       responseModel = completion.model;
-      assistantMessage = this.createTextMessage(
-        'assistant',
-        completion.text,
-      );
+      assistantMessage = this.createTextMessage('assistant', completion.text);
     }
 
+    session.provider = responseProvider;
+    session.model = responseModel;
     session.messages = [...session.messages, assistantMessage];
+
     const savedSession = await this.dataSource.manager.save(
       AiChatSession,
       session,
@@ -188,8 +202,6 @@ export class AiAgentService {
         .map((row, index) => this.toCompanyView(this.asRecord(row), index))
         .filter((company) => company.name.length > 0);
     } catch {
-      // The AI chat should still work if the companies table is not available
-      // in a newly configured local database.
       return [];
     }
   }
@@ -197,7 +209,7 @@ export class AiAgentService {
   private toCompanyView(row: JsonRecord, index: number): CompanyView {
     const id =
       this.readString(row, ['id', 'companyId', 'company_id']) ||
-      `company-${index + 1}`;
+      'company-' + (index + 1);
     const name = this.readString(row, [
       'name',
       'companyName',
@@ -230,8 +242,7 @@ export class AiAgentService {
       foundedYear,
       annualRevenue,
       employees,
-      profitEfficiency:
-        employees > 0 ? annualRevenue / employees : 0,
+      profitEfficiency: employees > 0 ? annualRevenue / employees : 0,
     };
   }
 
@@ -242,19 +253,10 @@ export class AiAgentService {
     const query = input.toLowerCase();
 
     if (
-      this.includesAny(query, [
-        'level',
-        '等级',
-        '级别',
-        '层级',
-      ])
+      this.includesAny(query, ['level', '等级', '级别', '层级'])
     ) {
       return companies.length > 0
-        ? this.createDistributionChart(
-            companies,
-            'level',
-            'Companies by level',
-          )
+        ? this.createDistributionChart(companies, 'level', 'Companies by level')
         : this.createTextMessage(
             'assistant',
             'No company records are currently available in the database.',
@@ -367,8 +369,10 @@ export class AiAgentService {
         'assistant',
         companies.length > 0
           ? isChinese
-            ? `目前数据库中共有 **${companies.length} 家公司**。`
-            : `There are currently **${companies.length} companies** in the database.`
+            ? '目前数据库中共有 **' + companies.length + ' 家公司**。'
+            : 'There are currently **' +
+              companies.length +
+              ' companies** in the database.'
           : isChinese
             ? '目前数据库中没有公司记录。'
             : 'There are currently no company records available in the database.',
@@ -420,244 +424,59 @@ export class AiAgentService {
 
   private createDatabaseContext(companies: CompanyView[]): string {
     if (companies.length === 0) {
-      return [
-        '[Verified database company records]',
-        'No company records are available from the database.',
-        'Do not invent company records.',
-      ].join('\n');
+      return 'Database company records: none available.';
     }
-
-    const selected = new Map<string, CompanyView>();
-    const sortedByRevenue = [...companies].sort(
-      (first, second) =>
-        second.annualRevenue - first.annualRevenue ||
-        first.name.localeCompare(second.name),
-    );
-    const sortedByEmployees = [...companies].sort(
-      (first, second) =>
-        second.employees - first.employees ||
-        first.name.localeCompare(second.name),
-    );
-
-    for (const company of [
-      ...sortedByRevenue.slice(0, 100),
-      ...sortedByEmployees.slice(0, 100),
-    ]) {
-      selected.set(company.id, company);
-    }
-
-    const records = Array.from(selected.values()).map((company, index) => {
-      return [
-        `${index + 1}.`,
-        `Name: ${company.name}`,
-        `Level: ${company.level || 'Unknown'}`,
-        `Country: ${company.country || 'Unknown'}`,
-        `City: ${company.city || 'Unknown'}`,
-        `Founded year: ${company.foundedYear ?? 'Unknown'}`,
-        `Annual revenue: ${company.annualRevenue}`,
-        `Employees: ${company.employees}`,
-        `Profit efficiency: ${company.profitEfficiency}`,
-      ].join(' | ');
-    });
 
     return [
-      '[Verified database company records]',
-      `Database currently contains ${companies.length} company records.`,
-      'The following records are real database values. Use them when answering company-specific questions.',
-      'Do not create additional company records that are not listed here.',
-      records.join('\n'),
+      'Database company records (JSON):',
+      JSON.stringify(companies),
     ].join('\n');
   }
 
   private formatMessageForModel(message: AiChatMessage): string {
-    const rawContent = this.asRecord(message.content);
+    const content = message.content;
 
-    // Supports old sessions that stored text as { markdown: string }.
-    if (typeof rawContent.markdown === 'string') {
-      return rawContent.markdown;
+    switch (content.type) {
+      case 'text':
+        return content.text;
+      case 'table':
+        return [
+          content.title || 'Table',
+          JSON.stringify({
+            columns: content.columns,
+            rows: content.rows,
+          }),
+        ].join('\n');
+      case 'chart':
+        return [
+          content.title,
+          JSON.stringify({
+            chartType: content.chartType,
+            labels: content.labels,
+            datasets: content.datasets,
+          }),
+        ].join('\n');
+      case 'report':
+        return [content.title, content.summary].join('\n');
+      case 'confirmation':
+        return [content.title, content.description].join('\n');
     }
-
-    if (rawContent.type === 'text') {
-      return typeof rawContent.text === 'string'
-        ? rawContent.text
-        : '';
-    }
-
-    if (rawContent.type === 'table') {
-      return this.formatTableMessage(rawContent);
-    }
-
-    if (rawContent.type === 'chart') {
-      return this.formatChartMessage(rawContent);
-    }
-
-    if (rawContent.type === 'report') {
-      return [
-        '[Structured dashboard report]',
-        `Title: ${this.formatModelValue(rawContent.title)}`,
-        `Status: ${this.formatModelValue(rawContent.status)}`,
-        `Summary: ${this.formatModelValue(rawContent.summary)}`,
-        rawContent.url
-          ? `URL: ${this.formatModelValue(rawContent.url)}`
-          : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
-    }
-
-    if (rawContent.type === 'confirmation') {
-      const actions = Array.isArray(rawContent.actions)
-        ? rawContent.actions
-            .map((action) => {
-              const record = this.asRecord(action);
-              return this.formatModelValue(record.label);
-            })
-            .join(', ')
-        : '';
-
-      return [
-        '[Structured dashboard confirmation]',
-        `Title: ${this.formatModelValue(rawContent.title)}`,
-        `Description: ${this.formatModelValue(rawContent.description)}`,
-        `Actions: ${actions}`,
-      ].join('\n');
-    }
-
-    return '';
-  }
-
-  private formatTableMessage(content: JsonRecord): string {
-    const title =
-      typeof content.title === 'string'
-        ? content.title
-        : 'Dashboard table';
-
-    const columns: Array<{ key: string; label: string }> = [];
-
-    if (Array.isArray(content.columns)) {
-      for (const item of content.columns) {
-        const column = this.asRecord(item);
-
-        if (
-          typeof column.key === 'string' &&
-          typeof column.label === 'string'
-        ) {
-          columns.push({
-            key: column.key,
-            label: column.label,
-          });
-        }
-      }
-    }
-
-    const rows = Array.isArray(content.rows) ? content.rows : [];
-    const formattedRows = rows.map((row, index) => {
-      const record = this.asRecord(row);
-      const values =
-        columns.length > 0
-          ? columns.map(
-              (column) =>
-                `${column.label}: ${this.formatModelValue(
-                  record[column.key],
-                )}`,
-            )
-          : Object.entries(record).map(
-              ([key, value]) =>
-                `${key}: ${this.formatModelValue(value)}`,
-            );
-
-      return `${index + 1}. ${values.join('; ')}`;
-    });
-
-    return [
-      '[Structured dashboard table]',
-      `Title: ${title}`,
-      columns.length > 0
-        ? `Columns: ${columns
-            .map((column) => `${column.key}=${column.label}`)
-            .join(' | ')}`
-        : '',
-      formattedRows.length > 0
-        ? `Records:\n${formattedRows.join('\n')}`
-        : 'Records: none',
-    ]
-      .filter(Boolean)
-      .join('\n');
-  }
-
-  private formatChartMessage(content: JsonRecord): string {
-    const title =
-      typeof content.title === 'string'
-        ? content.title
-        : 'Dashboard chart';
-    const chartType =
-      typeof content.chartType === 'string'
-        ? content.chartType
-        : 'unknown';
-
-    const lines = [
-      '[Structured dashboard chart]',
-      `Title: ${title}`,
-      `Chart type: ${chartType}`,
-    ];
-
-    if (Array.isArray(content.labels) && Array.isArray(content.datasets)) {
-      for (const item of content.datasets) {
-        const dataset = this.asRecord(item);
-        const datasetData = Array.isArray(dataset.data)
-          ? dataset.data
-          : null;
-        const values = datasetData
-          ? content.labels.map((label, index) => {
-              return `${this.formatModelValue(label)}: ${this.formatModelValue(
-                datasetData[index],
-              )}`;
-            })
-          : [];
-
-        lines.push(
-          `${this.formatModelValue(dataset.label)}: ${values.join('; ')}`,
-        );
-      }
-
-      return lines.join('\n');
-    }
-
-    // Supports the older chart shape: { data, xKey, yKeys }.
-    if (Array.isArray(content.data)) {
-      const rows = content.data.map((item, index) => {
-        const record = this.asRecord(item);
-        return `${index + 1}. ${Object.entries(record)
-          .map(
-            ([key, value]) =>
-              `${key}: ${this.formatModelValue(value)}`,
-          )
-          .join('; ')}`;
-      });
-
-      lines.push(rows.length > 0 ? `Data:\n${rows.join('\n')}` : 'Data: none');
-      return lines.join('\n');
-    }
-
-    lines.push('Data: none');
-    return lines.join('\n');
   }
 
   private createDistributionChart(
     companies: CompanyView[],
-    dimension: 'level' | 'country',
+    field: 'level' | 'country',
     title: string,
   ): AiChatMessage {
     const counts = new Map<string, number>();
 
     for (const company of companies) {
-      const value = company[dimension].trim() || 'Unknown';
-      counts.set(value, (counts.get(value) ?? 0) + 1);
+      const value = company[field] || 'Unknown';
+      counts.set(value, (counts.get(value) || 0) + 1);
     }
 
-    const sorted = Array.from(counts.entries()).sort(
-      (first, second) =>
-        second[1] - first[1] || first[0].localeCompare(second[0]),
+    const labels = Array.from(counts.keys()).sort((a, b) =>
+      a.localeCompare(b),
     );
 
     return {
@@ -667,12 +486,11 @@ export class AiAgentService {
         type: 'chart',
         title,
         chartType: 'bar',
-        labels: sorted.map(([label]) => label),
+        labels,
         datasets: [
           {
             label: 'Companies',
-            data: sorted.map(([, count]) => count),
-            backgroundColor: '#00a76f',
+            data: labels.map((label) => counts.get(label) || 0),
           },
         ],
       },
@@ -753,15 +571,14 @@ export class AiAgentService {
       'text/markdown',
     ]);
     const sections: string[] = [];
-    let remainingCharacters = 12_000;
+    let remainingCharacters = 12000;
 
     for (const file of files) {
       const mimeType = file.mimetype.toLowerCase();
 
       if (
         remainingCharacters <= 0 ||
-        (!mimeType.startsWith('text/') &&
-          !readableMimeTypes.has(mimeType))
+        (!mimeType.startsWith('text/') && !readableMimeTypes.has(mimeType))
       ) {
         continue;
       }
@@ -775,12 +592,12 @@ export class AiAgentService {
         continue;
       }
 
-      sections.push(`File: ${file.originalname}\n${content}`);
+      sections.push('File: ' + file.originalname + '\n' + content);
       remainingCharacters -= content.length;
     }
 
     return sections.length > 0
-      ? `Attached file content:\n\n${sections.join('\n\n')}`
+      ? 'Attached file content:\n\n' + sections.join('\n\n')
       : '';
   }
 
@@ -922,7 +739,7 @@ export class AiAgentService {
       const parsed =
         typeof value === 'number'
           ? value
-          : Number(String(value).replace(/[,\s]/g, ''));
+          : Number(String(value).replace(/[, \s]/g, ''));
 
       if (Number.isFinite(parsed)) {
         return parsed;
@@ -932,7 +749,7 @@ export class AiAgentService {
     return null;
   }
 
-  private formatModelValue(value: unknown): string {
+  private formatMessageForModelValue(value: unknown): string {
     if (value === null || value === undefined) {
       return 'null';
     }
