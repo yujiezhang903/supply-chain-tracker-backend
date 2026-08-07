@@ -1,11 +1,4 @@
-import {
-  IsIn,
-  IsOptional,
-  IsString,
-  IsUUID,
-  MaxLength,
-  MinLength,
-} from 'class-validator';
+import { IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 import { AI_PROVIDERS, type AiProvider } from '../types/ai-provider.type';
 
@@ -14,10 +7,10 @@ export class SendChatMessageDto {
   @IsUUID()
   sessionId?: string;
 
+  @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(12000)
-  content!: string;
+  content?: string;
 
   @IsOptional()
   @IsIn(AI_PROVIDERS)

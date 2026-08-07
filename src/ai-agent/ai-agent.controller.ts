@@ -1,47 +1,25 @@
 import {
   Body,
   Controller,
-  Delete,
-  Get,
-  Param,
   Post,
   UploadedFiles,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { ApiBearerAuth } from '@nestjs/swagger';
 import { FilesInterceptor } from '@nestjs/platform-express';
 
-import {
-  AiAgentService,
-  type UploadedChatFile,
-} from './ai-agent.service';
-import { CreateChatSessionDto } from './dto/create-chat-session.dto';
+import { AiJwtAuthGuard } from './auth/ai-jwt-auth.guard';
+import { CurrentAiUser } from './auth/current-ai-user.decorator';
+import { AiAgentService, type UploadedChatFile } from './ai-agent.service';
 import { SendChatMessageDto } from './dto/send-chat-message.dto';
+import type { AiAccessContext } from './types/ai-access-context.type';
 
+@ApiBearerAuth()
+@UseGuards(AiJwtAuthGuard)
 @Controller('ai-agent')
 export class AiAgentController {
-  constructor(
-    private readonly aiAgentService: AiAgentService,
-  ) {}
-
-  @Post('sessions')
-  createSession(@Body() dto: CreateChatSessionDto) {
-    return this.aiAgentService.createSession(dto);
-  }
-
-  @Get('sessions')
-  findAllSessions() {
-    return this.aiAgentService.findAllSessions();
-  }
-
-  @Get('sessions/:id')
-  findSession(@Param('id') id: string) {
-    return this.aiAgentService.findSession(id);
-  }
-
-  @Delete('sessions/:id')
-  deleteSession(@Param('id') id: string) {
-    return this.aiAgentService.deleteSession(id);
-  }
+  constructor(private readonly aiAgentService: AiAgentService) {}
 
   @Post('chat')
   @UseInterceptors(
@@ -52,9 +30,10 @@ export class AiAgentController {
     }),
   )
   sendMessage(
+    @CurrentAiUser() context: AiAccessContext,
     @Body() dto: SendChatMessageDto,
     @UploadedFiles() files: UploadedChatFile[] = [],
   ) {
-    return this.aiAgentService.sendMessage(dto, files);
+    return this.aiAgentService.sendMessage(context, dto, files);
   }
 }

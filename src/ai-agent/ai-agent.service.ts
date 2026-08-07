@@ -1,16 +1,16 @@
 import { randomUUID } from 'node:crypto';
 
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { Injectable } from '@nestjs/common';
 
+import { CompaniesService } from '../companies/companies.service';
 import { AiModelRouterService } from './adapters/ai-model-router.service';
+import { AiCacheService } from './cache/ai-cache.service';
 import { CreateChatSessionDto } from './dto/create-chat-session.dto';
 import { SendChatMessageDto } from './dto/send-chat-message.dto';
-import { AiChatSession } from './entities/ai-chat-session.entity';
-import type {
-  AiChatMessage,
-  ModelMessage,
-} from './types/chat-message.type';
+import { AiChatSessionsService } from './services/ai-chat-sessions.service';
+import { AiOperationAuditsService } from './services/ai-operation-audits.service';
+import type { AiAccessContext } from './types/ai-access-context.type';
+import type { AiChatMessage, ModelMessage } from './types/chat-message.type';
 
 export type UploadedChatFile = {
   originalname: string;
@@ -36,13 +36,15 @@ type JsonRecord = Record<string, unknown>;
 @Injectable()
 export class AiAgentService {
   constructor(
-    private readonly dataSource: DataSource,
     private readonly modelRouter: AiModelRouterService,
+    private readonly companiesService: CompaniesService,
+    private readonly sessionsService: AiChatSessionsService,
+    private readonly cacheService: AiCacheService,
+    private readonly auditsService: AiOperationAuditsService,
   ) {}
 
-  async createSession(dto: CreateChatSessionDto) {
+  async createSession(context: AiAccessContext, dto: CreateChatSessionDto) {
     const provider = this.modelRouter.normalizeProvider(dto.provider);
-
     const messages = dto.demo
       ? this.createDemoMessages()
       : [
@@ -52,69 +54,38 @@ export class AiAgentService {
           ),
         ];
 
-    const session = this.dataSource.manager.create(AiChatSession, {
-      title: dto.title?.trim() || 'New conversation',
-      provider,
-      model: 'rule-based',
-      status: 'active',
-      userId: null,
-      messages,
-    });
-
-    return this.dataSource.manager.save(AiChatSession, session);
-  }
-
-  findAllSessions() {
-    return this.dataSource.manager.find(AiChatSession, {
-      order: {
-        updatedAt: 'DESC',
+    return this.sessionsService.create(
+      context,
+      {
+        ...dto,
+        title: dto.title?.trim() || 'New conversation',
+        provider,
       },
-      take: 20,
-    });
-  }
-
-  async findSession(id: string) {
-    const session = await this.dataSource.manager.findOne(AiChatSession, {
-      where: { id },
-    });
-
-    if (!session) {
-      throw new NotFoundException('AI chat session not found');
-    }
-
-    return session;
-  }
-
-  async deleteSession(id: string) {
-    const result = await this.dataSource.manager.delete(AiChatSession, id);
-
-    if (!result.affected) {
-      throw new NotFoundException('AI chat session not found');
-    }
-
-    return { deleted: true, id };
+      messages,
+    );
   }
 
   async sendMessage(
+    context: AiAccessContext,
     dto: SendChatMessageDto,
     files: UploadedChatFile[] = [],
   ) {
     const session = dto.sessionId
-      ? await this.findSession(dto.sessionId)
-      : await this.createSession({
+      ? await this.sessionsService.findOne(context, dto.sessionId)
+      : await this.createSession(context, {
           provider: dto.provider,
         });
-
     const provider = this.modelRouter.normalizeProvider(
       dto.provider ?? session.provider,
     );
-    const userContent = dto.content.trim();
+    const userContent = dto.content?.trim() ?? '';
 
     if (!userContent && files.length === 0) {
       return {
         session,
         provider,
         model: session.model,
+        cacheHit: false,
         userMessage: null,
         assistantMessage: this.createTextMessage(
           'assistant',
@@ -128,7 +99,6 @@ export class AiAgentService {
       mimeType: file.mimetype,
       size: file.size,
     }));
-
     const userMessage: AiChatMessage = {
       ...this.createTextMessage(
         'user',
@@ -136,57 +106,114 @@ export class AiAgentService {
       ),
       ...(attachments.length > 0 ? { attachments } : {}),
     };
+    const previousContext = await this.cacheService.getSessionContext(
+      context,
+      session.id,
+      () => session.messages ?? [],
+    );
+    const conversationContext = [...previousContext, userMessage].slice(-20);
+    const nextTitle =
+      session.title === 'New conversation'
+        ? userContent.slice(0, 80) || 'File analysis'
+        : undefined;
 
-    session.provider = provider;
-    session.messages = [...(session.messages ?? []), userMessage];
+    await this.sessionsService.appendMessages(
+      context,
+      session.id,
+      [userMessage],
+      undefined,
+      provider,
+      nextTitle,
+    );
 
-    if (session.title === 'New conversation') {
-      session.title = userContent.slice(0, 80) || 'File analysis';
-    }
-
-    await this.dataSource.manager.save(AiChatSession, session);
-
-    const companies = await this.loadCompanies();
-    const ruleMessage = this.createRuleBasedReply(companies, userContent);
-
-    let assistantMessage: AiChatMessage;
+    const cachedMessage =
+      files.length === 0 && userContent
+        ? await this.cacheService.getChatResult(
+            context,
+            userContent,
+            'companies',
+          )
+        : null;
+    let cacheHit = cachedMessage !== null;
+    let assistantMessage: AiChatMessage | null = cachedMessage
+      ? {
+          ...cachedMessage,
+          id: randomUUID(),
+          createdAt: new Date().toISOString(),
+        }
+      : null;
     let responseModel = 'rule-based';
     let responseProvider = provider;
 
-    if (ruleMessage) {
-      assistantMessage = ruleMessage;
-    } else {
-      const modelMessages = this.toModelMessages(session.messages, companies);
-      const fileContext = this.extractFileContext(files);
-      const lastMessage = modelMessages.at(-1);
+    if (!assistantMessage) {
+      cacheHit = false;
+      const companies = await this.loadCompanies();
+      const ruleMessage = this.createRuleBasedReply(companies, userContent);
 
-      if (fileContext && lastMessage?.role === 'user') {
-        lastMessage.content += '\n\n' + fileContext;
+      if (ruleMessage) {
+        assistantMessage = ruleMessage;
+      } else {
+        const modelMessages = this.toModelMessages(
+          conversationContext,
+          companies,
+        );
+        const fileContext = this.extractFileContext(files);
+        const lastMessage = modelMessages.at(-1);
+
+        if (fileContext && lastMessage?.role === 'user') {
+          lastMessage.content += '\n\n' + fileContext;
+        }
+
+        const completion = await this.modelRouter.complete(
+          provider,
+          modelMessages,
+        );
+
+        responseProvider = completion.provider;
+        responseModel = completion.model;
+        assistantMessage = this.createTextMessage('assistant', completion.text);
       }
 
-      const completion = await this.modelRouter.complete(
-        provider,
-        modelMessages,
-      );
-
-      responseProvider = completion.provider;
-      responseModel = completion.model;
-      assistantMessage = this.createTextMessage('assistant', completion.text);
+      if (files.length === 0 && userContent) {
+        await this.cacheService.setChatResult(
+          context,
+          userContent,
+          assistantMessage,
+          'companies',
+        );
+      }
+    } else {
+      responseModel = 'cache';
     }
 
-    session.provider = responseProvider;
-    session.model = responseModel;
-    session.messages = [...session.messages, assistantMessage];
+    if (!assistantMessage) {
+      throw new Error('AI response generation did not produce a message');
+    }
 
-    const savedSession = await this.dataSource.manager.save(
-      AiChatSession,
-      session,
+    const savedSession = await this.sessionsService.appendMessages(
+      context,
+      session.id,
+      [assistantMessage],
+      responseModel,
+      responseProvider,
     );
+    await this.auditsService.record(context, {
+      action: 'chat.message',
+      resourceType: 'ai_chat_session',
+      resourceId: session.id,
+      metadata: {
+        provider: responseProvider,
+        model: responseModel,
+        cacheHit,
+        attachmentCount: files.length,
+      },
+    });
 
     return {
       session: savedSession,
       provider: responseProvider,
       model: responseModel,
+      cacheHit,
       userMessage,
       assistantMessage,
     };
@@ -194,9 +221,7 @@ export class AiAgentService {
 
   private async loadCompanies(): Promise<CompanyView[]> {
     try {
-      const rows: unknown[] = await this.dataSource.query(
-        'SELECT * FROM "companies"',
-      );
+      const rows = await this.companiesService.findAll();
 
       return rows
         .map((row, index) => this.toCompanyView(this.asRecord(row), index))
@@ -210,11 +235,7 @@ export class AiAgentService {
     const id =
       this.readString(row, ['id', 'companyId', 'company_id']) ||
       'company-' + (index + 1);
-    const name = this.readString(row, [
-      'name',
-      'companyName',
-      'company_name',
-    ]);
+    const name = this.readString(row, ['name', 'companyName', 'company_name']);
     const level = this.readString(row, ['level']);
     const country = this.readString(row, ['country']);
     const city = this.readString(row, ['city']);
@@ -252,9 +273,7 @@ export class AiAgentService {
   ): AiChatMessage | null {
     const query = input.toLowerCase();
 
-    if (
-      this.includesAny(query, ['level', '等级', '级别', '层级'])
-    ) {
+    if (this.includesAny(query, ['level', '等级', '级别', '层级'])) {
       return companies.length > 0
         ? this.createDistributionChart(companies, 'level', 'Companies by level')
         : this.createTextMessage(
@@ -427,10 +446,9 @@ export class AiAgentService {
       return 'Database company records: none available.';
     }
 
-    return [
-      'Database company records (JSON):',
-      JSON.stringify(companies),
-    ].join('\n');
+    return ['Database company records (JSON):', JSON.stringify(companies)].join(
+      '\n',
+    );
   }
 
   private formatMessageForModel(message: AiChatMessage): string {
@@ -475,9 +493,7 @@ export class AiAgentService {
       counts.set(value, (counts.get(value) || 0) + 1);
     }
 
-    const labels = Array.from(counts.keys()).sort((a, b) =>
-      a.localeCompare(b),
-    );
+    const labels = Array.from(counts.keys()).sort((a, b) => a.localeCompare(b));
 
     return {
       id: randomUUID(),
@@ -585,7 +601,8 @@ export class AiAgentService {
 
       const content = file.buffer
         .toString('utf8')
-        .replace(/\u0000/g, '')
+        .split('\u0000')
+        .join('')
         .slice(0, remainingCharacters);
 
       if (!content.trim()) {
@@ -676,11 +693,7 @@ export class AiAgentService {
   }
 
   private asRecord(value: unknown): JsonRecord {
-    if (
-      typeof value === 'object' &&
-      value !== null &&
-      !Array.isArray(value)
-    ) {
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
       return value as JsonRecord;
     }
 
@@ -695,7 +708,11 @@ export class AiAgentService {
         continue;
       }
 
-      const text = String(value).trim();
+      if (!['string', 'number', 'boolean', 'bigint'].includes(typeof value)) {
+        continue;
+      }
+
+      const text = `${value as string | number | boolean | bigint}`.trim();
 
       if (text) {
         return text;
@@ -725,10 +742,7 @@ export class AiAgentService {
     return 0;
   }
 
-  private readNumberOrNull(
-    record: JsonRecord,
-    keys: string[],
-  ): number | null {
+  private readNumberOrNull(record: JsonRecord, keys: string[]): number | null {
     for (const key of keys) {
       const value = record[key];
 
@@ -736,10 +750,14 @@ export class AiAgentService {
         continue;
       }
 
+      if (typeof value !== 'number' && typeof value !== 'string') {
+        continue;
+      }
+
       const parsed =
         typeof value === 'number'
           ? value
-          : Number(String(value).replace(/[, \s]/g, ''));
+          : Number(value.replace(/[, \s]/g, ''));
 
       if (Number.isFinite(parsed)) {
         return parsed;
@@ -747,18 +765,6 @@ export class AiAgentService {
     }
 
     return null;
-  }
-
-  private formatMessageForModelValue(value: unknown): string {
-    if (value === null || value === undefined) {
-      return 'null';
-    }
-
-    if (typeof value === 'object') {
-      return JSON.stringify(value);
-    }
-
-    return String(value);
   }
 
   private includesAny(query: string, keywords: string[]): boolean {

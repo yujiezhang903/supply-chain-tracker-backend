@@ -1,19 +1,16 @@
 import { Injectable } from '@nestjs/common';
 
 import type { ModelAdapter } from './model-adapter.interface';
-import type {
-  ModelCompletion,
-  ModelMessage,
-} from '../types/chat-message.type';
+import type { ModelCompletion, ModelMessage } from '../types/chat-message.type';
 
 @Injectable()
 export class MockAdapter implements ModelAdapter {
-  async complete(messages: ModelMessage[]): Promise<ModelCompletion> {
+  complete(messages: ModelMessage[]): Promise<ModelCompletion> {
     const lastUserMessage = [...messages]
       .reverse()
       .find((message) => message.role === 'user');
 
-    return {
+    return Promise.resolve({
       provider: 'mock',
       model: 'local-mock',
       text: [
@@ -25,6 +22,6 @@ export class MockAdapter implements ModelAdapter {
         '- This reply was persisted with the session.',
         '- Set `AI_MODEL_PROVIDER` to `deepseek`, `qwen`, or `openai` to use a real model.',
       ].join('\n'),
-    };
+    });
   }
 }

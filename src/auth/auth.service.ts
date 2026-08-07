@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcrypt';
+import bcrypt from 'bcrypt';
 
 import { UsersService } from '../users/users.service';
 import { SignupDto } from './dto/signup.dto';
@@ -22,10 +22,7 @@ export class AuthService {
       status: 'Active',
     });
 
-    const payload = {
-      sub: user.id,
-      email: user.email,
-    };
+    const payload = this.createTokenPayload(user);
 
     return {
       message: 'Signup successful',
@@ -41,23 +38,37 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    const passwordMatched = await bcrypt.compare(loginDto.password, user.password);
+    const passwordMatched = await bcrypt.compare(
+      loginDto.password,
+      user.password,
+    );
 
     if (!passwordMatched) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    const { password: _password, ...safeUser } = user;
+    const { password, ...safeUser } = user;
+    void password;
 
-    const payload = {
-      sub: user.id,
-      email: user.email,
-    };
+    const payload = this.createTokenPayload(user);
 
     return {
       message: 'Login successful',
       user: safeUser,
       accessToken: this.jwtService.sign(payload),
+    };
+  }
+
+  private createTokenPayload(user: {
+    id: string;
+    email: string;
+    role: string;
+  }) {
+    return {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      tenantId: process.env.AI_DEFAULT_TENANT_ID || 'default',
     };
   }
 }

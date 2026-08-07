@@ -6,15 +6,9 @@ import { MockAdapter } from './mock.adapter';
 import { OpenAiAdapter } from './openai.adapter';
 import { QwenAdapter } from './qwen.adapter';
 
-import {
-  isAiProvider,
-  type AiProvider,
-} from '../types/ai-provider.type';
+import { isAiProvider, type AiProvider } from '../types/ai-provider.type';
 
-import type {
-  ModelCompletion,
-  ModelMessage,
-} from '../types/chat-message.type';
+import type { ModelCompletion, ModelMessage } from '../types/chat-message.type';
 
 @Injectable()
 export class AiModelRouterService {
@@ -33,9 +27,7 @@ export class AiModelRouterService {
    * AI_MODEL_PROVIDER=deepseek
    */
   getDefaultProvider(): AiProvider {
-    const configured = (
-      this.config.get<string>('AI_MODEL_PROVIDER') ?? 'mock'
-    )
+    const configured = (this.config.get<string>('AI_MODEL_PROVIDER') ?? 'mock')
       .trim()
       .toLowerCase();
 
@@ -58,9 +50,7 @@ export class AiModelRouterService {
    * openai
    * mock
    */
-  normalizeProvider(
-    provider?: AiProvider | string | null,
-  ): AiProvider {
+  normalizeProvider(provider?: string | null): AiProvider {
     if (!provider || typeof provider !== 'string') {
       return this.getDefaultProvider();
     }
@@ -85,7 +75,7 @@ export class AiModelRouterService {
    * provider: 'qwen'
    */
   complete(
-    provider: AiProvider | string | null | undefined,
+    provider: string | null | undefined,
     messages: ModelMessage[],
   ): Promise<ModelCompletion> {
     const selectedProvider = this.normalizeProvider(provider);
@@ -102,11 +92,6 @@ export class AiModelRouterService {
 
       case 'mock':
         return this.mock.complete(messages);
-
-      default:
-        throw new BadRequestException(
-          `Unsupported AI provider: ${selectedProvider}`,
-        );
     }
   }
 }
