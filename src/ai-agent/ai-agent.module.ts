@@ -17,6 +17,7 @@ import { AiJwtAuthGuard } from './auth/ai-jwt-auth.guard';
 import { AiCacheService } from './cache/ai-cache.service';
 import { AiRedisService } from './cache/ai-redis.service';
 import { AiTaskStateCheckpointerService } from './cache/ai-task-state-checkpointer.service';
+import { LangGraphCheckpointerFactory } from './cache/langgraph-redis-checkpointer';
 import { AiCacheController } from './controllers/ai-cache.controller';
 import { AiChatSessionsController } from './controllers/ai-chat-sessions.controller';
 import { AiOperationAuditsController } from './controllers/ai-operation-audits.controller';
@@ -71,6 +72,7 @@ import { AiUserMemoriesService } from './services/ai-user-memories.service';
     AiRedisService,
     AiCacheService,
     AiTaskStateCheckpointerService,
+    LangGraphCheckpointerFactory,
     AiJwtAuthGuard,
     AiAdminGuard,
     AiModelRouterService,
@@ -87,6 +89,7 @@ import { AiUserMemoriesService } from './services/ai-user-memories.service';
     AiOperationAuditsService,
     AiCacheService,
     AiTaskStateCheckpointerService,
+    LangGraphCheckpointerFactory,
   ],
 })
 export class AiAgentModule {}
