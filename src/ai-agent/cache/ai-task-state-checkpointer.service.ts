@@ -31,7 +31,7 @@ export class AiTaskStateCheckpointerService {
     const threadId = this.requireThreadId(config);
     const state = await this.cacheService.getTaskState(context, threadId);
 
-    if (!state) {
+    if (!state || !this.isRecord(state.checkpoint)) {
       return undefined;
     }
 
@@ -112,6 +112,10 @@ export class AiTaskStateCheckpointerService {
     }
 
     return threadId;
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 
   private emptyState(): AiTaskState {
