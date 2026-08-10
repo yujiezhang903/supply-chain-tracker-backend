@@ -31,7 +31,11 @@ import { AiAgentModule } from './ai-agent/ai-agent.module';
         database: config.get<string>('DATABASE_NAME'),
 
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize:
+          config.get<string>('DATABASE_SYNCHRONIZE', 'true') === 'true',
+        migrationsRun:
+          config.get<string>('DATABASE_MIGRATIONS_RUN', 'false') === 'true',
+        migrations: [__dirname + '/database/migrations/*{.ts,.js}'],
       }),
     }),
 
