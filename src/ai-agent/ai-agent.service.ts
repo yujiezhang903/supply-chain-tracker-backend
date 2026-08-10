@@ -822,8 +822,8 @@ export class AiAgentService {
     query: string,
   ): string | null {
     const numberedMatch =
-      query.match(/\\blevel\\s*[-:]?\\s*(\\d+)\\b/i) ??
-      query.match(/第?\\s*(\\d+)\\s*(?:级|层)/);
+      query.match(/\blevel\s*[-:]?\s*(\d+)\b/i) ??
+      query.match(/第?\s*(\d+)\s*(?:级|层)/);
 
     if (numberedMatch) {
       const requested = 'level' + numberedMatch[1];
@@ -835,10 +835,10 @@ export class AiAgentService {
     }
 
     const asksForHighLevel =
-      /\\bhigh(?:est)?(?:\\s+level)?\\b/i.test(query) ||
+      /\bhigh(?:est)?(?:\s+level)?\b/i.test(query) ||
       this.includesAny(query, ['高等级', '高级别', '最高等级', '最高级别']);
     const asksForLowLevel =
-      /\\blow(?:est)?(?:\\s+level)?\\b/i.test(query) ||
+      /\blow(?:est)?(?:\s+level)?\b/i.test(query) ||
       this.includesAny(query, ['低等级', '低级别', '最低等级', '最低级别']);
 
     if (!asksForHighLevel && !asksForLowLevel) {
@@ -848,7 +848,7 @@ export class AiAgentService {
     const numberedLevels = companies
       .map((company) => ({
         label: company.level,
-        number: Number(company.level.match(/\\d+/)?.[0]),
+        number: Number(company.level.match(/\d+/)?.[0]),
       }))
       .filter(
         (level): level is { label: string; number: number } =>
@@ -871,7 +871,7 @@ export class AiAgentService {
   }
 
   private normalizeLevel(value: string): string {
-    return value.trim().toLowerCase().replace(/[\\s_-]+/g, '');
+    return value.trim().toLowerCase().replace(/[\s_-]+/g, '');
   }
 
   private includesAny(query: string, keywords: string[]): boolean {
