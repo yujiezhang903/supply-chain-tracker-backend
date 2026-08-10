@@ -131,7 +131,7 @@ export class AiAgentService {
         ? await this.cacheService.getChatResult(
             context,
             userContent,
-            'companies',
+            'companies-v2',
           )
         : null;
     let cacheHit = cachedMessage !== null;
@@ -179,7 +179,7 @@ export class AiAgentService {
           context,
           userContent,
           assistantMessage,
-          'companies',
+          'companies-v2',
         );
       }
     } else {
@@ -272,6 +272,56 @@ export class AiAgentService {
     input: string,
   ): AiChatMessage | null {
     const query = input.toLowerCase();
+    const requestedLevel = this.extractRequestedLevel(companies, query);
+    const asksForLevelDistribution = this.includesAny(query, [
+      'distribution',
+      'breakdown',
+      'chart',
+      'graph',
+      'statistics',
+      '统计各',
+      '等级统计',
+      '级别统计',
+      '等级分布',
+      '级别分布',
+      '图表',
+    ]);
+
+    if (requestedLevel && !asksForLevelDistribution) {
+      const normalizedLevel = this.normalizeLevel(requestedLevel);
+      const filteredCompanies = companies.filter(
+        (company) => this.normalizeLevel(company.level) === normalizedLevel,
+      );
+      const sortBy = this.includesAny(query, [
+        'employee',
+        'employees',
+        'staff',
+        '员工',
+        '雇员',
+      ])
+        ? 'employees'
+        : this.includesAny(query, [
+              'revenue',
+              'income',
+              'annual revenue',
+              '营收',
+              '收入',
+              '盈利',
+            ])
+          ? 'revenue'
+          : 'name';
+
+      return filteredCompanies.length > 0
+        ? this.createCompanyTable(
+            filteredCompanies,
+            sortBy,
+            requestedLevel + ' companies',
+          )
+        : this.createTextMessage(
+            'assistant',
+            'No companies were found for ' + requestedLevel + '.',
+          );
+    }
 
     if (this.includesAny(query, ['level', '等级', '级别', '层级'])) {
       return companies.length > 0
@@ -765,6 +815,63 @@ export class AiAgentService {
     }
 
     return null;
+  }
+
+  private extractRequestedLevel(
+    companies: CompanyView[],
+    query: string,
+  ): string | null {
+    const numberedMatch =
+      query.match(/\\blevel\\s*[-:]?\\s*(\\d+)\\b/i) ??
+      query.match(/第?\\s*(\\d+)\\s*(?:级|层)/);
+
+    if (numberedMatch) {
+      const requested = 'level' + numberedMatch[1];
+      const existing = companies.find(
+        (company) => this.normalizeLevel(company.level) === requested,
+      );
+
+      return existing?.level || 'Level ' + numberedMatch[1];
+    }
+
+    const asksForHighLevel =
+      /\\bhigh(?:est)?(?:\\s+level)?\\b/i.test(query) ||
+      this.includesAny(query, ['高等级', '高级别', '最高等级', '最高级别']);
+    const asksForLowLevel =
+      /\\blow(?:est)?(?:\\s+level)?\\b/i.test(query) ||
+      this.includesAny(query, ['低等级', '低级别', '最低等级', '最低级别']);
+
+    if (!asksForHighLevel && !asksForLowLevel) {
+      return null;
+    }
+
+    const numberedLevels = companies
+      .map((company) => ({
+        label: company.level,
+        number: Number(company.level.match(/\\d+/)?.[0]),
+      }))
+      .filter(
+        (level): level is { label: string; number: number } =>
+          level.label.length > 0 && Number.isFinite(level.number),
+      )
+      .sort((first, second) => first.number - second.number);
+
+    if (numberedLevels.length > 0) {
+      return asksForHighLevel
+        ? numberedLevels[numberedLevels.length - 1].label
+        : numberedLevels[0].label;
+    }
+
+    const namedLevel = asksForHighLevel ? 'high' : 'low';
+    return (
+      companies.find(
+        (company) => this.normalizeLevel(company.level) === namedLevel,
+      )?.level ?? null
+    );
+  }
+
+  private normalizeLevel(value: string): string {
+    return value.trim().toLowerCase().replace(/[\\s_-]+/g, '');
   }
 
   private includesAny(query: string, keywords: string[]): boolean {
