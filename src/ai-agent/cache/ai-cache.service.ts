@@ -15,7 +15,7 @@ export const AI_CACHE_KEY_PREFIXES = {
 } as const;
 
 export type AiTaskState = {
-  checkpoint: Record<string, unknown>;
+  checkpoint: unknown;
   metadata: Record<string, unknown>;
   pendingWrites: unknown[];
   updatedAt: string;
