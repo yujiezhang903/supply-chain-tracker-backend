@@ -154,17 +154,23 @@ export class LangGraphRedisCheckpointer extends BaseCheckpointSaver {
     return typeof value === 'string' ? value : '';
   }
 
-  private isCheckpoint(value: Record<string, unknown>): value is Checkpoint {
+  private isCheckpoint(value: unknown): value is Checkpoint {
+    if (typeof value !== 'object' || value === null) {
+      return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+
     return (
-      typeof value.id === 'string' &&
-      typeof value.v === 'number' &&
-      typeof value.ts === 'string' &&
-      typeof value.channel_values === 'object' &&
-      value.channel_values !== null &&
-      typeof value.channel_versions === 'object' &&
-      value.channel_versions !== null &&
-      typeof value.versions_seen === 'object' &&
-      value.versions_seen !== null
+      typeof candidate.id === 'string' &&
+      typeof candidate.v === 'number' &&
+      typeof candidate.ts === 'string' &&
+      typeof candidate.channel_values === 'object' &&
+      candidate.channel_values !== null &&
+      typeof candidate.channel_versions === 'object' &&
+      candidate.channel_versions !== null &&
+      typeof candidate.versions_seen === 'object' &&
+      candidate.versions_seen !== null
     );
   }
 }
