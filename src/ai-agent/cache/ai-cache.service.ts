@@ -100,6 +100,7 @@ export class AiCacheService {
     context: AiAccessContext,
     query: string,
     businessDimension = 'default',
+    cacheVariant = 'default',
   ): Promise<AiChatMessage | null> {
     const policy = this.chatPolicy(businessDimension);
 
@@ -108,7 +109,7 @@ export class AiCacheService {
     }
 
     return this.redisService.getJson<AiChatMessage>(
-      this.chatResultKey(context, businessDimension, query),
+      this.chatResultKey(context, businessDimension, cacheVariant, query),
     );
   }
 
@@ -117,6 +118,7 @@ export class AiCacheService {
     query: string,
     message: AiChatMessage,
     businessDimension = 'default',
+    cacheVariant = 'default',
   ): Promise<void> {
     const policy = this.chatPolicy(businessDimension);
 
@@ -124,7 +126,12 @@ export class AiCacheService {
       return;
     }
 
-    const key = this.chatResultKey(context, businessDimension, query);
+    const key = this.chatResultKey(
+      context,
+      businessDimension,
+      cacheVariant,
+      query,
+    );
     const indexKey = this.chatResultIndexKey(
       context.tenantId,
       businessDimension,
@@ -194,13 +201,14 @@ export class AiCacheService {
   private chatResultKey(
     context: AiAccessContext,
     businessDimension: string,
+    cacheVariant: string,
     query: string,
   ): string {
     const queryHash = createHash('sha256')
       .update(query.trim().replace(/\s+/g, ' ').toLowerCase())
       .digest('hex');
 
-    return `${AI_CACHE_KEY_PREFIXES.chatResult}${context.tenantId}:${this.normalizeDimension(businessDimension)}:${context.userId}:${queryHash}`;
+    return `${AI_CACHE_KEY_PREFIXES.chatResult}${context.tenantId}:${this.normalizeDimension(businessDimension)}:${this.normalizeDimension(cacheVariant)}:${context.userId}:${queryHash}`;
   }
 
   private chatResultIndexKey(
@@ -266,4 +274,3 @@ export class AiCacheService {
     return normalized.slice(0, 64) || 'default';
   }
 }
-

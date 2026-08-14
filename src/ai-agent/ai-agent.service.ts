@@ -141,17 +141,16 @@ export class AiAgentService {
       nextTitle,
     );
 
-    // Model-generated answers are provider-specific. Including the provider in
-    // the dimension prevents a response from one model being served after the
-    // user switches to another model with the same question.
-    const chatCacheDimension =
-      COMPANY_CHAT_CACHE_DIMENSION + '-' + provider;
+    // Model-generated answers are provider-specific. The provider is a cache
+    // variant, while the stable business dimension still owns TTL overrides
+    // and lets one admin invalidation clear every provider's entries.
     const cachedMessage =
       files.length === 0 && userContent
         ? await this.cacheService.getChatResult(
             context,
             userContent,
-            chatCacheDimension,
+            COMPANY_CHAT_CACHE_DIMENSION,
+            provider,
           )
         : null;
     let cacheHit = cachedMessage !== null;
@@ -199,7 +198,8 @@ export class AiAgentService {
           context,
           userContent,
           assistantMessage,
-          chatCacheDimension,
+          COMPANY_CHAT_CACHE_DIMENSION,
+          provider,
         );
       }
     } else {

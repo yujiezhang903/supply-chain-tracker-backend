@@ -80,6 +80,62 @@ describe('AI cache services', () => {
     ).resolves.toBeNull();
   });
 
+  it('isolates provider variants and invalidates them together', async () => {
+    const mockResult = message('mock answer');
+    const openAiResult = message('openai answer');
+
+    await cacheService.setChatResult(
+      user,
+      'same question',
+      mockResult,
+      'companies-v2',
+      'mock',
+    );
+    await cacheService.setChatResult(
+      user,
+      'same question',
+      openAiResult,
+      'companies-v2',
+      'openai',
+    );
+
+    await expect(
+      cacheService.getChatResult(
+        user,
+        'same question',
+        'companies-v2',
+        'mock',
+      ),
+    ).resolves.toEqual(mockResult);
+    await expect(
+      cacheService.getChatResult(
+        user,
+        'same question',
+        'companies-v2',
+        'openai',
+      ),
+    ).resolves.toEqual(openAiResult);
+    await expect(
+      cacheService.invalidateChatResults('tenant-a', 'companies-v2'),
+    ).resolves.toBe(2);
+    await expect(
+      cacheService.getChatResult(
+        user,
+        'same question',
+        'companies-v2',
+        'mock',
+      ),
+    ).resolves.toBeNull();
+    await expect(
+      cacheService.getChatResult(
+        user,
+        'same question',
+        'companies-v2',
+        'openai',
+      ),
+    ).resolves.toBeNull();
+  });
+
   it('supports LangGraph-compatible task checkpoint operations', async () => {
     const checkpointer = new AiTaskStateCheckpointerService(cacheService);
     const config = { configurable: { thread_id: 'task-1' } };
