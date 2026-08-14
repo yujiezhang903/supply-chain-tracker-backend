@@ -24,6 +24,11 @@ export type AiAuthenticatedRequest = Request & {
   aiUser?: AiAccessContext;
 };
 
+/**
+ * Builds the trusted AI access context from a verified JWT and the current
+ * database user. Downstream services never accept tenant scope from request
+ * parameters.
+ */
 @Injectable()
 export class AiJwtAuthGuard implements CanActivate {
   constructor(
@@ -61,6 +66,8 @@ export class AiJwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('The user is unavailable or inactive');
     }
 
+    // Older tokens may not carry a tenant claim. Keep the compatibility
+    // fallback centralized and configurable instead of trusting request input.
     const tenantId = this.normalizeTenantId(
       payload.tenantId ??
         this.configService.get<string>('AI_DEFAULT_TENANT_ID') ??
@@ -95,3 +102,4 @@ export class AiJwtAuthGuard implements CanActivate {
     return tenantId;
   }
 }
+

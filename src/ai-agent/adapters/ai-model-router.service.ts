@@ -20,12 +20,7 @@ export class AiModelRouterService {
     private readonly mock: MockAdapter,
   ) {}
 
-  /**
-   * 获取环境变量中配置的默认模型
-   *
-   * 例如：
-   * AI_MODEL_PROVIDER=deepseek
-   */
+  /** Return and validate the provider selected by AI_MODEL_PROVIDER. */
   getDefaultProvider(): AiProvider {
     const configured = (this.config.get<string>('AI_MODEL_PROVIDER') ?? 'mock')
       .trim()
@@ -41,15 +36,7 @@ export class AiModelRouterService {
     return configured;
   }
 
-  /**
-   * 验证前端传入的模型名称
-   *
-   * 支持：
-   * deepseek
-   * qwen
-   * openai
-   * mock
-   */
+  /** Normalize an optional request override or fall back to configuration. */
   normalizeProvider(provider?: string | null): AiProvider {
     if (!provider || typeof provider !== 'string') {
       return this.getDefaultProvider();
@@ -67,13 +54,7 @@ export class AiModelRouterService {
     return normalized;
   }
 
-  /**
-   * 根据模型名称调用对应的适配器
-   *
-   * 前端可以传：
-   * provider: 'deepseek'
-   * provider: 'qwen'
-   */
+  /** Route a provider-neutral message list to the selected adapter. */
   complete(
     provider: string | null | undefined,
     messages: ModelMessage[],
@@ -95,3 +76,4 @@ export class AiModelRouterService {
     }
   }
 }
+

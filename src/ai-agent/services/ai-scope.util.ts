@@ -3,6 +3,10 @@ import { ForbiddenException } from '@nestjs/common';
 import type { AiPaginationQueryDto } from '../dto/ai-pagination-query.dto';
 import type { AiAccessContext } from '../types/ai-access-context.type';
 
+/**
+ * User-owned list endpoints fail closed: a normal user may omit userId or
+ * repeat their own ID, but cannot turn the filter into a cross-user query.
+ */
 export function assertSelfFilter(
   context: AiAccessContext,
   requestedUserId?: string,
@@ -42,3 +46,4 @@ export function paginatedResult<T>(
     pageCount: Math.ceil(total / limit),
   };
 }
+

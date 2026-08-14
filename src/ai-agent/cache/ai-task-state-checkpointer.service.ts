@@ -20,6 +20,11 @@ export type LangGraphCheckpointTuple = {
   pendingWrites: unknown[];
 };
 
+/**
+ * Lightweight checkpoint facade retained for AI task services that do not yet
+ * depend on LangGraph's BaseCheckpointSaver. It stores the latest checkpoint
+ * and pending writes in the same tenant/user-scoped cache namespace.
+ */
 @Injectable()
 export class AiTaskStateCheckpointerService {
   constructor(private readonly cacheService: AiCacheService) {}
@@ -127,3 +132,4 @@ export class AiTaskStateCheckpointerService {
     };
   }
 }
+

@@ -1,71 +1,123 @@
-# AI Agent data and cache foundation
+# AI Agent module
 
-This module owns all AI-specific persistence and does not change any existing
-business table. Every AI row is scoped by `tenantId`; user-owned rows also
-carry a `userId` foreign key to `users.id`.
+This module owns AI-specific persistence, authorization, model routing and
+cache behavior. It calls existing business services for project data and does
+not add fields to existing business tables.
 
-## Tables
+## Code map
 
-| Table | Purpose | Main constraints and indexes |
+| Path | Responsibility |
+| --- | --- |
+| `adapters/` | Provider-neutral model interface and provider adapters |
+| `auth/` | JWT validation, current-user context and administrator guard |
+| `cache/` | Redis ownership, chat/session caching and LangGraph checkpoint state |
+| `controllers/` | Authenticated CRUD and cache administration routes |
+| `dto/` | Request validation and pagination inputs |
+| `entities/` | The four AI-owned TypeORM entities |
+| `services/` | Tenant-scoped CRUD, audit recording and access helpers |
+| `ai-agent.service.ts` | One-turn chat orchestration and structured responses |
+
+## Data model
+
+| Table | Purpose | Important constraints and indexes |
 | --- | --- | --- |
-| `ai_chat_session` | Persisted chat sessions and messages | User FK, tenant/user/update index, tenant/status index, status check |
-| `ai_user_memory` | Long-term user memory entries | User FK, unique tenant/user/memory key, importance check, expiry index |
-| `ai_task_record` | Agent task records | User and optional session FKs, status/progress checks, tenant/user/status index |
-| `ai_operation_audit` | AI operation audit log | Nullable user FK, tenant/user/time and tenant/action/time indexes, outcome check |
+| `ai_chat_session` | Persisted sessions and messages | User FK; tenant/user/update and tenant/status indexes; status check |
+| `ai_user_memory` | Long-term user memory | User FK; unique tenant/user/key; importance check; expiry index |
+| `ai_task_record` | Agent task records | User and optional session FKs; status/progress checks; tenant/user/status index |
+| `ai_operation_audit` | AI operation audit log | Nullable user FK; tenant/user/time and tenant/action/time indexes; outcome check |
 
-The application currently uses TypeORM `synchronize: true` for local
-development, so registered entities create these tables automatically. A
-production deployment should replace synchronization with reviewed migrations.
+The tables are created by
+`src/database/migrations/1786392000000-CreateAiAgentTables.ts`. Local
+`synchronize` support is temporary; reviewed migrations are the deployment
+source of truth.
 
-## Authorization and tenant isolation
+## Request and authorization flow
 
-All `/ai-agent/**` endpoints require `Authorization: Bearer <JWT>`. The guard
-loads the current user from the existing `users` table. `tenantId` comes from
-the signed JWT, with `AI_DEFAULT_TENANT_ID` as a compatibility fallback for
-tokens issued before tenant claims were added.
+1. `AiJwtAuthGuard` verifies the bearer token.
+2. The guard reloads the user and rejects missing or inactive accounts.
+3. It creates an `AiAccessContext` containing the verified user and tenant.
+4. Controllers pass that context to services.
+5. Every user-owned repository query includes both `tenantId` and `userId`.
+6. Administrator audit queries can cross users only inside the current tenant.
 
-Every repository lookup includes `tenantId`. Session, memory and task queries
-also include the current `userId`. A missing or foreign ID returns 404, so an
-API caller cannot use record existence to probe another user or tenant.
-Administrators may read all audit rows in their own tenant and optionally
-filter them by `userId`; they never bypass tenant scope.
+Foreign IDs return the same 404 response as missing IDs. This prevents callers
+from using response differences to discover another user's or tenant's data.
 
-## CRUD routes
+## Chat flow
 
-- `POST/GET /ai-agent/sessions`, `GET/PATCH/DELETE /ai-agent/sessions/:id`
-- `POST /ai-agent/sessions/:id/close`
-- `POST/GET /ai-agent/memories`, `GET/PATCH/DELETE /ai-agent/memories/:id`
-- `POST/GET /ai-agent/tasks`, `GET/PATCH/DELETE /ai-agent/tasks/:id`
-- `POST/GET /ai-agent/audits`, `GET/PATCH/DELETE /ai-agent/audits/:id`
-- `POST /ai-agent/chat`
+`AiAgentService` coordinates one message without bypassing module boundaries:
 
-List routes accept `page`, `limit` and optional `userId`. Audit mutations and
-cache invalidation are administrator-only.
+1. Load or create the current user's session.
+2. Restore recent context from Redis or the persisted session.
+3. Persist the user message.
+4. Return a deterministic table/chart for supported company-data questions, or
+   route the request through the selected model adapter.
+5. Cache eligible chat results.
+6. Persist the assistant response and record an audit event.
+
+Company data is loaded through `CompaniesService.findAll()`, not by querying
+the company repository from the AI module.
 
 ## Redis ownership
 
-`AiRedisService` is the only class allowed to call the Redis client. Higher
-layers use `AiCacheService` and these prefixes:
+`AiRedisService` is the only class that calls the Redis client. Higher layers
+use `AiCacheService` and the following namespaces:
 
-- `ai:session:`: latest 20 messages (10 turns), default TTL 2 hours; DB fallback
-- `ai:chat_cache:`: per-tenant, per-user, per-query result, default TTL 10 minutes
-- `ai:llm_cache:`: reserved placeholder; model caching is not implemented
-- `ai:task_state:`: expiring task/checkpoint state for future LangGraph work
+| Prefix | Content | Default expiry |
+| --- | --- | --- |
+| `ai:session:` | Latest 20 messages (10 turns) | 2 hours |
+| `ai:chat_cache:` | Result for the same tenant, user, dimension and normalized query | 10 minutes |
+| `ai:llm_cache:` | Reserved model-cache namespace | Not implemented |
+| `ai:task_state:` | Current task/checkpoint state | 24 hours |
 
-`DELETE /ai-agent/cache/chat/:businessDimension` invalidates a tenant's cache
-for updated business data. `AiTaskStateCheckpointerService` exposes
-`getTuple`, `put`, `putWrites`, `list`, and `deleteThread` shapes compatible
-with a later LangGraph Checkpointer adapter.
+Chat cache keys contain a SHA-256 hash of the normalized query. A separate
+per-tenant, per-dimension index supports targeted invalidation after business
+data changes.
 
-## Configuration
+If Redis is unavailable, a process-local map keeps local development usable.
+That fallback is intentionally limited: it is lost on restart and is not shared
+between application instances.
 
-See `.env.example` for Redis URL, default tenant, cache TTLs, per-dimension
-chat TTL overrides and task-state expiry. Redis connection failure uses a
-process-local fallback for development; production should monitor
-`GET /ai-agent/cache/status` and keep Redis available.
+## LangGraph compatibility
 
-## Existing business services
+`LangGraphRedisCheckpointer` implements `BaseCheckpointSaver` and binds the
+tenant/user namespace in its factory. Tenant identity never comes from
+LangGraph's `RunnableConfig`.
 
-The chat service injects `CompaniesService.findAll()` rather than directly
-querying the `companies` table. This keeps AI access behind the project's
-existing service boundary and leaves the business schema unchanged.
+The current Redis representation stores the latest checkpoint and pending
+writes for a thread. Historical checkpoint traversal is outside this
+milestone.
+
+## Model providers
+
+`AiModelRouterService` supports `deepseek`, `qwen`, `openai` and
+`mock`. Provider adapters share the OpenAI-compatible HTTP transport where
+possible. Use `mock` for local flow testing without external credentials.
+
+## Routes
+
+All routes require `Authorization: Bearer <JWT>`.
+
+- `POST/GET /ai-agent/sessions`
+- `GET/PATCH/DELETE /ai-agent/sessions/:id`
+- `POST /ai-agent/sessions/:id/close`
+- `POST/GET /ai-agent/memories`
+- `GET/PATCH/DELETE /ai-agent/memories/:id`
+- `POST/GET /ai-agent/tasks`
+- `GET/PATCH/DELETE /ai-agent/tasks/:id`
+- `POST/GET /ai-agent/audits`
+- `GET/PATCH/DELETE /ai-agent/audits/:id`
+- `POST /ai-agent/chat`
+
+Cache status and invalidation routes are administrator-only.
+
+## Validation
+
+```bash
+npm test -- ai-access-isolation.spec.ts --runInBand
+npm test -- ai-cache.service.spec.ts --runInBand
+npm run build
+```
+
+When changing cache TTLs or provider settings, update `.env.example` and this
+guide in the same commit.

@@ -25,6 +25,10 @@ type ChatCompletionResponse = {
   };
 };
 
+/**
+ * Shared HTTP transport for providers that expose the OpenAI chat-completions
+ * contract. Provider classes supply credentials and provider-specific fields.
+ */
 export abstract class OpenAiCompatibleAdapter {
   protected async request(
     config: AdapterConfig,
@@ -84,3 +88,4 @@ export abstract class OpenAiCompatibleAdapter {
     };
   }
 }
+
