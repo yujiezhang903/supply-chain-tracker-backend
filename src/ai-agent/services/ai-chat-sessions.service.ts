@@ -17,6 +17,11 @@ import type { AiChatMessage } from '../types/chat-message.type';
 import { AiOperationAuditsService } from './ai-operation-audits.service';
 import { assertSelfFilter, paginatedResult, pagination } from './ai-scope.util';
 
+/**
+ * Persists chat sessions and keeps their short-term cache synchronized. Every
+ * lookup is scoped by both tenant and user before a record can be read or
+ * mutated.
+ */
 @Injectable()
 export class AiChatSessionsService {
   constructor(
@@ -76,6 +81,8 @@ export class AiChatSessionsService {
   }
 
   async findOne(context: AiAccessContext, id: string): Promise<AiChatSession> {
+    // A foreign ID intentionally produces the same 404 as a missing ID, which
+    // prevents record-existence probing across users or tenants.
     const session = await this.sessionsRepository.findOne({
       where: {
         id,
@@ -184,3 +191,4 @@ export class AiChatSessionsService {
     return { id, deleted: true };
   }
 }
+

@@ -4,7 +4,10 @@ import { Injectable } from '@nestjs/common';
 
 import { CompaniesService } from '../companies/companies.service';
 import { AiModelRouterService } from './adapters/ai-model-router.service';
-import { AiCacheService } from './cache/ai-cache.service';
+import {
+  AI_SESSION_MESSAGE_LIMIT,
+  AiCacheService,
+} from './cache/ai-cache.service';
 import { CreateChatSessionDto } from './dto/create-chat-session.dto';
 import { SendChatMessageDto } from './dto/send-chat-message.dto';
 import { AiChatSessionsService } from './services/ai-chat-sessions.service';
@@ -33,6 +36,16 @@ type CompanyView = {
 
 type JsonRecord = Record<string, unknown>;
 
+const COMPANY_CHAT_CACHE_DIMENSION = 'companies-v2';
+const FILE_CONTEXT_CHARACTER_LIMIT = 12_000;
+const MODEL_CONTEXT_MESSAGE_LIMIT = 30;
+
+/**
+ * Coordinates a complete chat turn while keeping persistence, caching,
+ * business-data access and model transport behind their owning services.
+ * Deterministic company queries run before model calls so dashboard totals and
+ * rankings always come from verified database records.
+ */
 @Injectable()
 export class AiAgentService {
   constructor(
@@ -111,7 +124,9 @@ export class AiAgentService {
       session.id,
       () => session.messages ?? [],
     );
-    const conversationContext = [...previousContext, userMessage].slice(-20);
+    const conversationContext = [...previousContext, userMessage].slice(
+      -AI_SESSION_MESSAGE_LIMIT,
+    );
     const nextTitle =
       session.title === 'New conversation'
         ? userContent.slice(0, 80) || 'File analysis'
@@ -126,12 +141,16 @@ export class AiAgentService {
       nextTitle,
     );
 
+    // Model-generated answers are provider-specific. The provider is a cache
+    // variant, while the stable business dimension still owns TTL overrides
+    // and lets one admin invalidation clear every provider's entries.
     const cachedMessage =
       files.length === 0 && userContent
         ? await this.cacheService.getChatResult(
             context,
             userContent,
-            'companies-v2',
+            COMPANY_CHAT_CACHE_DIMENSION,
+            provider,
           )
         : null;
     let cacheHit = cachedMessage !== null;
@@ -179,7 +198,8 @@ export class AiAgentService {
           context,
           userContent,
           assistantMessage,
-          'companies-v2',
+          COMPANY_CHAT_CACHE_DIMENSION,
+          provider,
         );
       }
     } else {
@@ -219,6 +239,10 @@ export class AiAgentService {
     };
   }
 
+  /**
+   * Reduce business entities to the fields that may be supplied to the model.
+   * Access stays behind CompaniesService rather than an AI-owned repository.
+   */
   private async loadCompanies(): Promise<CompanyView[]> {
     try {
       const rows = await this.companiesService.findAll();
@@ -267,6 +291,10 @@ export class AiAgentService {
     };
   }
 
+  /**
+   * Answer common dashboard questions without an LLM. This keeps structured
+   * tables, charts and counts reproducible from the same company snapshot.
+   */
   private createRuleBasedReply(
     companies: CompanyView[],
     input: string,
@@ -451,6 +479,10 @@ export class AiAgentService {
     return null;
   }
 
+  /**
+   * Serialize structured chat messages and prepend the verified company
+   * snapshot so model responses can preserve exact dashboard values.
+   */
   private toModelMessages(
     messages: AiChatMessage[],
     companies: CompanyView[],
@@ -475,7 +507,7 @@ export class AiAgentService {
       },
     ];
 
-    for (const message of messages.slice(-30)) {
+    for (const message of messages.slice(-MODEL_CONTEXT_MESSAGE_LIMIT)) {
       const content = this.formatMessageForModel(message);
 
       if (!content) {
@@ -629,6 +661,10 @@ export class AiAgentService {
     };
   }
 
+  /**
+   * Include text-like attachments only and cap their combined prompt size.
+   * Binary files remain as attachment metadata and are never decoded here.
+   */
   private extractFileContext(files: UploadedChatFile[]): string {
     const readableMimeTypes = new Set([
       'application/json',
@@ -637,7 +673,7 @@ export class AiAgentService {
       'text/markdown',
     ]);
     const sections: string[] = [];
-    let remainingCharacters = 12000;
+    let remainingCharacters = FILE_CONTEXT_CHARACTER_LIMIT;
 
     for (const file of files) {
       const mimeType = file.mimetype.toLowerCase();

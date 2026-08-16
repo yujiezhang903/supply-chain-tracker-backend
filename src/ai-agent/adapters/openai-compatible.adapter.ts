@@ -25,6 +25,10 @@ type ChatCompletionResponse = {
   };
 };
 
+/**
+ * Shared HTTP transport for providers that expose the OpenAI chat-completions
+ * contract. Provider classes supply credentials and provider-specific fields.
+ */
 export abstract class OpenAiCompatibleAdapter {
   protected async request(
     config: AdapterConfig,
@@ -36,7 +40,7 @@ export abstract class OpenAiCompatibleAdapter {
       );
     }
 
-    const endpoint = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`;
+    const endpoint = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
     let response: Response;
 
     try {
@@ -60,7 +64,10 @@ export abstract class OpenAiCompatibleAdapter {
       );
     }
 
-    const payload = (await response.json()) as ChatCompletionResponse;
+    // Some gateways return HTML, plain text, or an empty body when they fail.
+    // Treat those responses as an unavailable upstream instead of leaking a
+    // JSON parsing error as an internal server error.
+    const payload = await this.readResponse(response);
 
     if (!response.ok) {
       throw new ServiceUnavailableException(
@@ -82,5 +89,25 @@ export abstract class OpenAiCompatibleAdapter {
       model: config.model,
       text,
     };
+  }
+
+  private async readResponse(
+    response: Response,
+  ): Promise<ChatCompletionResponse> {
+    try {
+      const text = await response.text();
+
+      if (!text.trim()) {
+        return {};
+      }
+
+      const parsed: unknown = JSON.parse(text);
+
+      return typeof parsed === 'object' && parsed !== null
+        ? (parsed as ChatCompletionResponse)
+        : {};
+    } catch {
+      return {};
+    }
   }
 }

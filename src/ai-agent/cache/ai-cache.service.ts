@@ -14,6 +14,9 @@ export const AI_CACHE_KEY_PREFIXES = {
   taskState: 'ai:task_state:',
 } as const;
 
+export const AI_SESSION_MESSAGE_LIMIT = 20;
+const CHAT_CACHE_INDEX_TTL_BUFFER_SECONDS = 60;
+
 export type AiTaskState = {
   checkpoint: unknown;
   metadata: Record<string, unknown>;
@@ -21,6 +24,10 @@ export type AiTaskState = {
   updatedAt: string;
 };
 
+/**
+ * Owns AI cache key construction and TTL policy. Callers provide an already
+ * verified access context, which makes every user cache key tenant-scoped.
+ */
 @Injectable()
 export class AiCacheService {
   private readonly sessionTtlSeconds: number;
@@ -57,6 +64,7 @@ export class AiCacheService {
       return cached;
     }
 
+    // PostgreSQL is the source of truth when the short-lived cache is empty.
     const restored = this.limitSessionMessages(await databaseFallback());
     await this.redisService.setJson(key, restored, this.sessionTtlSeconds);
     return restored;
@@ -92,6 +100,7 @@ export class AiCacheService {
     context: AiAccessContext,
     query: string,
     businessDimension = 'default',
+    cacheVariant = 'default',
   ): Promise<AiChatMessage | null> {
     const policy = this.chatPolicy(businessDimension);
 
@@ -100,7 +109,7 @@ export class AiCacheService {
     }
 
     return this.redisService.getJson<AiChatMessage>(
-      this.chatResultKey(context, businessDimension, query),
+      this.chatResultKey(context, businessDimension, cacheVariant, query),
     );
   }
 
@@ -109,6 +118,7 @@ export class AiCacheService {
     query: string,
     message: AiChatMessage,
     businessDimension = 'default',
+    cacheVariant = 'default',
   ): Promise<void> {
     const policy = this.chatPolicy(businessDimension);
 
@@ -116,17 +126,26 @@ export class AiCacheService {
       return;
     }
 
-    const key = this.chatResultKey(context, businessDimension, query);
+    const key = this.chatResultKey(
+      context,
+      businessDimension,
+      cacheVariant,
+      query,
+    );
     const indexKey = this.chatResultIndexKey(
       context.tenantId,
       businessDimension,
     );
 
     await this.redisService.setJson(key, message, policy.ttlSeconds);
+
+    // Query keys are hashed, so this bounded index enables targeted
+    // invalidation without scanning the complete Redis keyspace.
     await this.redisService.addToSet(
       indexKey,
       key,
-      Math.max(policy.ttlSeconds, this.defaultChatTtlSeconds) + 60,
+      Math.max(policy.ttlSeconds, this.defaultChatTtlSeconds) +
+        CHAT_CACHE_INDEX_TTL_BUFFER_SECONDS,
     );
   }
 
@@ -182,13 +201,14 @@ export class AiCacheService {
   private chatResultKey(
     context: AiAccessContext,
     businessDimension: string,
+    cacheVariant: string,
     query: string,
   ): string {
     const queryHash = createHash('sha256')
       .update(query.trim().replace(/\s+/g, ' ').toLowerCase())
       .digest('hex');
 
-    return `${AI_CACHE_KEY_PREFIXES.chatResult}${context.tenantId}:${this.normalizeDimension(businessDimension)}:${context.userId}:${queryHash}`;
+    return `${AI_CACHE_KEY_PREFIXES.chatResult}${context.tenantId}:${this.normalizeDimension(businessDimension)}:${this.normalizeDimension(cacheVariant)}:${context.userId}:${queryHash}`;
   }
 
   private chatResultIndexKey(
@@ -203,7 +223,7 @@ export class AiCacheService {
   }
 
   private limitSessionMessages(messages: AiChatMessage[]): AiChatMessage[] {
-    return messages.slice(-20);
+    return messages.slice(-AI_SESSION_MESSAGE_LIMIT);
   }
 
   private chatPolicy(businessDimension: string): {

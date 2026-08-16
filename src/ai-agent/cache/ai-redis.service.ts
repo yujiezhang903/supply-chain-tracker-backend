@@ -12,6 +12,11 @@ type MemoryEntry = {
   expiresAt: number | null;
 };
 
+/**
+ * The only AI-module service that owns a Redis client. Each operation degrades
+ * to an expiring in-process map so local development remains usable when Redis
+ * is disabled or temporarily unavailable.
+ */
 @Injectable()
 export class AiRedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AiRedisService.name);
@@ -96,6 +101,8 @@ export class AiRedisService implements OnModuleInit, OnModuleDestroy {
     const serialized = JSON.stringify(value);
     const normalizedTtl = Math.max(1, Math.floor(ttlSeconds));
 
+    // Keep a local copy even while Redis is healthy. If a later command fails,
+    // the same process can continue serving recently written cache entries.
     this.memoryFallback.set(key, {
       value: serialized,
       expiresAt: Date.now() + normalizedTtl * 1000,
@@ -194,3 +201,4 @@ export class AiRedisService implements OnModuleInit, OnModuleDestroy {
     this.logger.warn(`${command} failed (${message}); using memory fallback`);
   }
 }
+
